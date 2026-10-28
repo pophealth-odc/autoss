@@ -36,6 +36,7 @@ folders on your computer. Nothing is uploaded anywhere.
 8. [Security model](#8-security-model)
 9. [Troubleshooting](#9-troubleshooting)
 10. [Project layout](#10-project-layout)
+11. [Running everything in a GitHub Codespace](#11-running-everything-in-a-github-codespace)
 
 ---
 
@@ -374,3 +375,63 @@ Run the service with `LOG_LEVEL=debug` for more detail. Nothing in the logs cont
 ```
 
 Verified behaviour of Edge, Playwright and the browser's local-network rules, with the experiments behind each decision, is in [`docs/FINDINGS.md`](docs/FINDINGS.md).
+
+---
+
+## 11. Running everything in a GitHub Codespace
+
+A Codespace is a Linux machine that GitHub runs for you. This repository can start the service **and** the web page there, so nothing has to run on your own computer. Read the trade-offs first: this is a different product from the Windows setup, not a drop-in copy of it.
+
+> **Status:** the configuration is checked by tests (`service/test/codespaces.test.ts`), and the gateway it relies on is tested against a real service in real Edge (`e2e/gateway-check.mjs`). **The Codespace itself has not been created and run yet**: the Edge install on Linux and the way Codespaces forwards the port are written from the documentation, not observed. Expect to fix small things on the first run.
+
+### What changes compared with running it on your computer
+
+| | On your computer (Windows) | In a Codespace |
+|---|---|---|
+| Where screenshots live | `service\screenshots` on your disk | A folder on GitHub's machine (`/workspaces/screenshots`). **They are deleted with the Codespace** (after at most 30 days stopped), so download what you want to keep. |
+| Who can reach the service | Only your computer | Only your GitHub account, through a private forwarded port |
+| Sites on your company network | Reachable | **Not reachable**: the machine is on GitHub's network, not yours |
+| Sites that need a company login (SSO) | Sign in once in headed Edge | Possible only through the in-browser desktop (port 6080), and many company sign-in policies refuse an unknown machine |
+| Cost | Free | Free allowance for a personal account is 120 core-hours a month. The smallest machine counts double, so about **60 hours of running time**. Stopped Codespaces cost only storage. |
+| Stops by itself | Never | After 30 minutes without activity (configurable, at most 12 hours in a row) |
+
+If the pages you capture are on your company network, or behind your company's sign-in, **a Codespace cannot see them**. Use the Windows setup.
+
+### Start it
+
+1. On GitHub, open the repository, then **Code → Codespaces → Create codespace on main**. Choose a machine with at least **2 cores and 8 GB** (the configuration asks for that).
+2. Wait for the first build (a few minutes: it installs Microsoft Edge and the packages). It starts the service automatically afterwards.
+3. The terminal prints a **pairing link**. Open it in your browser. This is the only address you need; it serves both the page and the service.
+4. Press **Pair**. Choose **Headless** mode on the Dashboard and capture as usual.
+
+Open the link in the browser you are signed in to GitHub with. The forwarded port is private; do not change it to **Public**, and do not share the link, because the link contains the pairing token.
+
+### How it works
+
+```
+ Your browser ──https──►  Codespaces (private port 4580, your GitHub sign-in)
+                              │
+                              ▼
+                    gateway (service/src/gateway)           ← serves the built web page
+                       │  /api/*  passed on unchanged         and passes /api to the service
+                       ▼
+                    local service 127.0.0.1:<random>  ──►  Microsoft Edge (headless)
+```
+
+* One address serves the page **and** the API, so the browser never makes a cross-site request (a private forwarded port cannot answer those).
+* The service itself is unchanged: it still listens on `127.0.0.1` only and still refuses unknown hosts and origins. The gateway applies the same checks (exact host names, no other websites) and still needs the pairing token.
+* Settings: `GATEWAY_ENABLED`, `GATEWAY_PORT`, `GATEWAY_WEB_ROOT`, `GATEWAY_ALLOWED_HOSTS` (see `service/src/gateway/gateway.ts`). The gateway is **off** unless `GATEWAY_ENABLED=true`, so the Windows setup is unaffected.
+
+### Seeing a headed Edge window
+
+Port 6080 serves a small desktop in the browser (password `vscode`, from the `desktop-lite` dev container feature). Open it from the **Ports** tab, then run a **Headed** capture on the Dashboard and the Edge window appears there. It is optional; headless runs do not need it.
+
+### If something does not work
+
+| Symptom | Fix |
+|---|---|
+| The terminal says Edge was installed, but not at `/opt/microsoft/msedge/msedge` | Set `EDGE_PATH` in `.devcontainer/devcontainer.json` to the path it lists, then **Rebuild Container**. |
+| The link opens but the page says it cannot reach the service | Run `bash scripts/codespaces/start.sh` in the terminal; read `/workspaces/screenshot-data/service.log`. |
+| The link opens a GitHub sign-in or a 404 | Open it in the browser where you are signed in to the same GitHub account that owns the Codespace. |
+| A run fails with "Blocked" on a company address | The Codespace cannot reach private addresses, and `ALLOW_PRIVATE_TARGETS` is off by default. Use the Windows setup. |
+| Everything vanished | The Codespace was deleted or rebuilt. Screenshots live only inside it. |

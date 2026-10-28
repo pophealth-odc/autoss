@@ -1,0 +1,57 @@
+{
+  "name": "Screenshot Gallery (service + web page)",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+
+  // Optional desktop in the browser (port 6080, password "vscode") so a HEADED Edge window can be seen and used, for example to
+  // sign in to a site once. It is not needed for headless runs.
+  "features": {
+    "ghcr.io/devcontainers/features/desktop-lite:1": {}
+  },
+
+  "containerEnv": {
+    // Debian's Edge package installs here; scripts/codespaces/post-create.sh checks it and stops with a message if it is wrong.
+    "EDGE_PATH": "/opt/microsoft/msedge/msedge",
+    // Serve the built web page and the API from ONE address (port 4580), the only port that needs forwarding.
+    "GATEWAY_ENABLED": "true",
+    "GATEWAY_PORT": "4580",
+    // Everything the service stores stays inside the Codespace.
+    "SCREENSHOTS_DIR": "/workspaces/screenshots",
+    "DATA_DIR": "/workspaces/screenshot-data"
+  },
+
+  // Runs once when the Codespace is created (and again on "Rebuild"): installs Edge and the packages, then builds.
+  "postCreateCommand": "bash scripts/codespaces/post-create.sh",
+  // Runs every time the Codespace starts or resumes: starts the service and the web page.
+  "postStartCommand": "bash scripts/codespaces/start.sh",
+
+  "forwardPorts": [4580],
+  "portsAttributes": {
+    "4580": {
+      "label": "Screenshot Gallery",
+      // "private" is Codespaces' default and is NOT set here on purpose: this port controls a browser and holds your
+      // screenshots and sign-ins. Do not change its visibility to Public.
+      "onAutoForward": "openBrowserOnce"
+    },
+    "6080": {
+      "label": "Desktop (headed Edge)",
+      "onAutoForward": "silent"
+    }
+  },
+  "otherPortsAttributes": {
+    "onAutoForward": "silent"
+  },
+
+  // Headless Edge needs more memory than the smallest machine type offers.
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb"
+  },
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

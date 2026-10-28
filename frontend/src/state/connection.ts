@@ -1,4 +1,5 @@
 import { ServiceClient, normalizeServiceUrl, problemAdvice } from '../api/client';
+import { sameOriginServiceUrl } from '../api/same-origin';
 import { ConnectionError, isConnectionError, isServiceError, type ConnectionProblem } from '../api/errors';
 import {
   DEFAULT_SERVICE_URL,
@@ -61,7 +62,9 @@ function initialState(): ConnectionState {
   const { token, remembered } = loadToken();
   return {
     phase: 'idle',
-    serviceUrl: loadString(KEYS.serviceUrl) ?? DEFAULT_SERVICE_URL,
+    // A page served together with its service always uses its own address: a saved address could only be a leftover from
+    // another copy of the page.
+    serviceUrl: sameOriginServiceUrl() ?? loadString(KEYS.serviceUrl) ?? DEFAULT_SERVICE_URL,
     hasToken: token !== null && token !== '',
     rememberToken: remembered,
     problem: null,

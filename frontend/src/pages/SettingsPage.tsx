@@ -8,6 +8,7 @@ import { formatBytes, formatDateTime } from '../lib/format';
 import { useTheme, type ThemeChoice } from '../lib/theme';
 import { useApp } from '../state/app-context';
 import { isLoopbackUrl } from '../api/client';
+import { isPageOrigin, pageServesService } from '../api/same-origin';
 
 /** Asks before accepting a pairing link. Mounted once at the top of the app so it appears wherever the link lands. */
 export function PairingPrompt() {
@@ -88,7 +89,7 @@ function ConnectionCard() {
         <Field label="Service address" htmlFor={`${uid}-url`} hint={<>Default: <code className="font-mono">{DEFAULT_SERVICE_URL}</code>. It must be an address on this computer.</>}>
           <input id={`${uid}-url`} type="text" inputMode="url" autoComplete="off" spellCheck={false} value={serviceUrl} onChange={(e) => setServiceUrl(e.target.value)} className={`${inputClass} font-mono`} />
         </Field>
-        {!isLoopbackUrl(serviceUrl.includes('://') ? serviceUrl : `http://${serviceUrl}`) ? (
+        {!isLoopbackUrl(serviceUrl.includes('://') ? serviceUrl : `http://${serviceUrl}`) && !isPageOrigin(serviceUrl.includes('://') ? serviceUrl : `http://${serviceUrl}`) ? (
           <p role="alert" className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
             This address is not on your computer. The service only listens on <code className="font-mono">127.0.0.1</code>, so a different address will not work.
           </p>
@@ -263,6 +264,21 @@ function AppearanceCard() {
 }
 
 function PrivacyCard() {
+  // Served together with its service (GitHub Codespaces): the service is not on this computer, so the usual promises would be false.
+  if (pageServesService()) {
+    return (
+      <Card>
+        <CardHeader title="How your data is handled" />
+        <ul className="list-disc space-y-1.5 p-5 pl-9 text-sm text-slate-700 dark:text-slate-300" data-testid="privacy-hosted">
+          <li>This page and its service run together on a remote machine (a GitHub Codespace), not on this computer. Screenshots, their list and browser profiles are stored in that machine&apos;s folders. There is no separate cloud storage or database.</li>
+          <li>The remote machine, and everything on it, belongs to your GitHub account. It is kept while the Codespace exists and is deleted with it, so download what you want to keep.</li>
+          <li>The address of this page is private to your GitHub account. Making the forwarded port public would let anyone with the link reach it; the pairing token is still required, but do not share the link.</li>
+          <li>This browser keeps only a few preferences (the form values and, if you allow it, the pairing token). It never stores screenshots.</li>
+          <li>Sign-in cookies for saved profiles stay in the profile folder on the remote machine.</li>
+        </ul>
+      </Card>
+    );
+  }
   return (
     <Card>
       <CardHeader title="How your data is handled" />

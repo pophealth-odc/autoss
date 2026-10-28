@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEdge } from './browser/edge.js';
 import { ConfigError, loadConfig } from './config.js';
+import { buildPairingLink, gatewaySettingsFromEnv, publicOrigin, startGateway, type RunningGateway } from './gateway/gateway.js';
 import { describeAllowedOrigins } from './http/app.js';
 import { createLogger } from './logger.js';
 import { startService } from './server.js';
@@ -38,8 +39,10 @@ async function main(): Promise<void> {
   loadEnvFile();
 
   let config;
+  let gatewaySettings;
   try {
     config = loadConfig(process.env, rootDir, readVersion());
+    gatewaySettings = gatewaySettingsFromEnv(process.env, rootDir);
   } catch (error) {
     if (error instanceof ConfigError) {
       console.error(error.message);
@@ -85,6 +88,32 @@ async function main(): Promise<void> {
   }
   if (!edge.found) lines.push('', bar(`WARNING: ${edge.hint ?? 'Microsoft Edge was not found.'}`));
   if (service.token.source === 'generated' && service.token.file) lines.push('', bar(`The token is stored in ${service.token.file}`));
+
+  // Optional: serve the built web page and the API from one address (used in GitHub Codespaces).
+  let gateway: RunningGateway | null = null;
+  if (gatewaySettings) {
+    try {
+      gateway = await startGateway({ ...gatewaySettings, upstreamPort: service.port, logger });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      console.error(
+        code === 'EADDRINUSE'
+          ? `\nGateway port ${gatewaySettings.port} is already in use. Set GATEWAY_PORT to a different number.`
+          : `\nThe gateway could not start: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      await service.stop().catch(() => undefined);
+      process.exit(1);
+    }
+    const origin = publicOrigin(process.env, gateway.port);
+    lines.push(
+      '',
+      bar('Web page + service on one address (GATEWAY_ENABLED):'),
+      bar(origin),
+      bar('Open this link once to pair this browser:'),
+      bar(buildPairingLink(origin, service.token.value)),
+    );
+  }
+
   lines.push('', bar('Keep this window open while you use the gallery. Press Ctrl+C to stop.'), '');
   console.log(lines.join('\n'));
 
@@ -95,7 +124,8 @@ async function main(): Promise<void> {
     logger.info(`${signal} received, shutting down…`);
     const force = setTimeout(() => process.exit(1), 20_000);
     force.unref();
-    service.stop().then(
+    // The gateway stops first so no new request reaches a service that is closing.
+    (gateway ? gateway.stop() : Promise.resolve()).then(() => service.stop()).then(
       () => process.exit(0),
       () => process.exit(1),
     );

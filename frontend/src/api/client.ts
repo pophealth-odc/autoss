@@ -1,4 +1,5 @@
 import { ConnectionError, errorFromResponse, ServiceError, type ConnectionProblem } from './errors';
+import { isPageOrigin } from './same-origin';
 import {
   API_VERSION,
   SERVICE_ID,
@@ -209,7 +210,9 @@ export class ServiceClient {
         headers,
         signal: controller.signal,
         cache: 'no-store',
-        credentials: 'omit',
+        // The service's own address never needs the browser's cookies, so they are not sent. The one exception is a service
+        // that shares this page's address (GitHub Codespaces): the forwarding layer in front of it may want its sign-in cookie.
+        credentials: isPageOrigin(this.config.baseUrl) ? 'same-origin' : 'omit',
         referrerPolicy: 'no-referrer',
         mode: 'cors',
         ...(payload !== undefined ? { body: payload } : {}),
