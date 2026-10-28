@@ -1,0 +1,23 @@
+{
+  "name": "screenshot-gallery-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "End-to-end checks of the whole product in real Microsoft Edge: built web page, local service, Edge automation, gallery.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "test": "node ui-flow.mjs",
+    "test:responsive": "node responsive-check.mjs",
+    "test:dev-script": "node start-dev-check.mjs",
+    "test:maximize": "node maximize-live-check.mjs",
+    "test:scale": "node scale-and-prevday-check.mjs",
+    "test:fill": "node fill-check.mjs",
+    "test:old-service": "node old-service-check.mjs",
+    "test:current-service": "node page-with-current-service-check.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.64.1"
+  }
+}

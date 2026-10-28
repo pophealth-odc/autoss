@@ -1,0 +1,97 @@
+name: Deploy web page to GitHub Pages
+
+# Publishes ONLY the web interface (frontend/). The local automation service is never deployed: it runs on each user's own
+# computer, because a web page cannot control a browser by itself.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'scripts/compute-pages-base.mjs'
+      - 'scripts/sync-shared.mjs'
+      - 'service/src/shared/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+# The default token only needs to read the repository; the deploy job gets the two extra permissions Pages requires.
+permissions:
+  contents: read
+
+# One deployment at a time. A newer push replaces a queued one, but a running deployment is never cancelled half way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v6
+
+      - name: Work out the base path
+        id: base
+        # PAGES_BASE is an optional repository variable (Settings > Secrets and variables > Actions > Variables).
+        # Set it to "/" when the site is served from a custom domain at its root.
+        env:
+          PAGES_BASE: ${{ vars.PAGES_BASE }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          base="$(node scripts/compute-pages-base.mjs "$REPOSITORY" "$PAGES_BASE")"
+          echo "Base path: $base"
+          echo "value=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Check that the shared API files are in sync
+        run: node scripts/sync-shared.mjs --check
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type-check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Run the unit tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_BASE: ${{ steps.base.outputs.value }}
+        run: npx vite build
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: frontend/dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,0 +1,17 @@
+# Example list of web addresses for testing, one per line.
+# Lines starting with # are ignored. Copy the lines you want into the "Web addresses" box on the Dashboard.
+#
+# These are standard test sites that exist for exactly this purpose.
+
+https://example.com/
+https://example.org/
+https://www.iana.org/help/example-domains
+https://httpbin.org/html
+https://httpbin.org/status/404
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Overview
+
+# A page that redirects (the final address is stored with the screenshot):
+https://httpbin.org/redirect/2
+
+# A page that is certain to fail, to see how failures are reported (the host does not exist):
+https://this-host-does-not-exist.invalid/

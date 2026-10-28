@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------------------------------------------------------------
+# Never commit anything the local service creates on a user's computer.
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Captured screenshots and the gallery index (private: they may show pages behind a login)
+screenshots/
+**/screenshots/
+service/data/
+**/data/index.json
+**/data/index.json.bak
+**/data/index.corrupt-*.json
+**/data/thumbs/
+
+# Saved Edge profiles hold cookies and sign-ins
+service/data/profiles/
+browser-profile/
+**/browser-profile/
+profiles/
+playwright_chromiumdev_profile-*/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+pairing-token.txt
+**/pairing-token.txt
+.pairing-token
+*.local
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Build output, dependencies and tool caches
+# ---------------------------------------------------------------------------------------------------------------------
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+**/dist-pages/
+build/
+coverage/
+**/coverage/
+.vite/
+**/.vite/
+*.tsbuildinfo
+test-results/
+playwright-report/
+**/test-results/
+**/playwright-report/
+.eslintcache
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Editors and operating systems
+# ---------------------------------------------------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code per-machine settings
+.claude/settings.local.json

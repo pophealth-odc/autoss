@@ -1,0 +1,83 @@
+name: CI
+
+# Checks every pull request and every push. Nothing here needs Microsoft Edge: the tests that drive a real browser skip
+# themselves when Edge is not installed, and run on a developer's Windows computer.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Web page
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Shared files are in sync
+        run: node scripts/sync-shared.mjs --check
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npx vite build
+        working-directory: frontend
+        env:
+          VITE_BASE: /screenshot-gallery/
+
+  service:
+    name: Local service
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: service/package-lock.json
+      - run: npm ci
+        working-directory: service
+      - run: npm run typecheck
+        working-directory: service
+      - name: Unit and API tests (no browser needed)
+        run: npm test
+        working-directory: service
+      - run: npm run build
+        working-directory: service
+
+  windows:
+    # The service is meant for Windows, so also prove it installs, builds and passes its tests there.
+    name: Local service on Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: service/package-lock.json
+      - run: npm ci
+        working-directory: service
+      - run: npm run typecheck
+        working-directory: service
+      - run: npm test
+        working-directory: service
+      - name: Tests with the real Microsoft Edge (preinstalled on GitHub's Windows runners)
+        run: npm run test:e2e
+        working-directory: service
