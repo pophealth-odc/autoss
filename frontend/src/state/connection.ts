@@ -53,6 +53,11 @@ export interface EventHandlers {
   onResync(): void;
 }
 
+/** True when the sign-in wall of a public deployment answered, as opposed to the service refusing a pairing token. */
+export function isSignInRequired(error: { code: string }): boolean {
+  return error.code === 'sign_in_required';
+}
+
 /** After this long without an answer the first attempt is reported as "waiting for the browser's permission prompt". */
 const PERMISSION_HINT_AFTER_MS = 1_800;
 /** Health checks run this often while connected, to notice a stopped service even when no event stream is open. */
@@ -201,6 +206,19 @@ export class ConnectionManager {
         rate_limited: 'rate-limited',
       };
       const problem = map[error.code] ?? 'incompatible';
+      // A page served together with its service sits behind a sign-in wall on a public address. When the wall (not the pairing
+      // token) turned the request away, say so: the pairing token is fine and the fix is to reload and sign in again.
+      if (isSignInRequired(error)) {
+        this.set({
+          phase: 'failed',
+          problem: 'unauthorized',
+          message: 'You are signed out of this site.',
+          advice: 'Reload this page and enter the access password. Your pairing token is not the problem.',
+          live: false,
+          info: null,
+        });
+        return;
+      }
       const message =
         problem === 'unauthorized' ? 'The pairing token was not accepted.' : problem === 'incompatible' ? error.message : error.message;
       this.set({

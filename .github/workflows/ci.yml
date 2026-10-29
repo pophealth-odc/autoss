@@ -60,6 +60,17 @@ jobs:
       - run: npm run build
         working-directory: service
 
+  container:
+    # The Render deployment is a Docker image with Microsoft Edge on Debian. None of that can be tested on Windows, so build it
+    # here and run it: the sign-in wall on a real socket, the entrypoint as root, and a real capture with Edge inside.
+    name: Container image (Render)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image and run the smoke test
+        run: bash scripts/render/smoke-test.sh
+
   windows:
     # The service is meant for Windows, so also prove it installs, builds and passes its tests there.
     name: Local service on Windows

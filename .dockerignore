@@ -1,0 +1,44 @@
+# Keep secrets, local data and build output out of the image (and out of the build context that is sent to the builder).
+.git
+.github
+.devcontainer
+.claude
+.vscode
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/pairing-token.txt
+*.pem
+*.key
+*.pfx
+
+# What the service creates on a user's computer
+service/data
+service/screenshots
+**/screenshots
+**/browser-profile
+**/profiles
+
+# Dependencies and build output are produced inside the image
+**/node_modules
+**/dist
+**/dist-pages
+**/coverage
+**/test-results
+**/playwright-report
+*.log
+*.tsbuildinfo
+
+# Not needed to build or run
+e2e
+docs
+examples
+service/test
+**/*.test.ts
+**/*.test.tsx
+README.md

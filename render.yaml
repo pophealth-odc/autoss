@@ -1,0 +1,49 @@
+# Render Blueprint for the Screenshot Gallery: the web page and the service in ONE web service, with Microsoft Edge.
+#
+# How to use it: in the Render dashboard choose New > Blueprint, pick this repository, and enter the two values it asks for
+# (GATEWAY_ACCESS_PASSWORD and PAIRING_TOKEN). Read "Deploying on Render" in the README first: the address is PUBLIC, and a
+# free instance is too small for Edge and keeps nothing between restarts.
+services:
+  - type: web
+    name: screenshot-gallery
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: oregon
+
+    # CHANGE THIS before relying on it. "free" has 512 MB of RAM, which Microsoft Edge will usually exceed (the browser is then
+    # killed in the middle of a capture), the service sleeps after 15 minutes without traffic, and there is no disk.
+    # "1c-2g" (1 CPU, 2 GB) is the smallest size that suits Edge.
+    plan: free
+
+    # Render polls this; it answers without a sign-in and says only that the process is up.
+    healthCheckPath: /healthz
+
+    # Deploy only when you say so (Manual Deploy), never as a side effect of a push.
+    autoDeployTrigger: "off"
+
+    # Time for Edge and the service to close cleanly when Render stops the instance (default 30, maximum 300).
+    maxShutdownDelaySeconds: 60
+
+    envVars:
+      # Typed into the Render dashboard when the Blueprint is created. They are never stored in this file or in git.
+      # The sign-in password for the site: 16 to 200 characters.
+      - key: GATEWAY_ACCESS_PASSWORD
+        sync: false
+      # The pairing token you paste into Settings after signing in: 24 to 200 letters, digits, and - _ . ~ + / =
+      # (Render's own "generate" option makes base64, which can contain characters this field does not accept, so choose one.)
+      - key: PAIRING_TOKEN
+        sync: false
+      # Where captured pages may point: public addresses only (the default). Do not enable private targets on a public service.
+      - key: ALLOW_PRIVATE_TARGETS
+        value: "false"
+      - key: LOG_LEVEL
+        value: info
+
+    # ---- Keep screenshots across deploys and restarts ---------------------------------------------------------------------
+    # A persistent disk needs a PAID plan. Remove the leading "# " on the four lines below when you change the plan above.
+    # With a disk, every deploy has a few seconds of downtime, because Render stops the old instance before starting the new one.
+    # disk:
+    #   name: gallery-data
+    #   mountPath: /data
+    #   sizeGB: 1

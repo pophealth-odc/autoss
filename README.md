@@ -37,6 +37,7 @@ folders on your computer. Nothing is uploaded anywhere.
 9. [Troubleshooting](#9-troubleshooting)
 10. [Project layout](#10-project-layout)
 11. [Running everything in a GitHub Codespace](#11-running-everything-in-a-github-codespace)
+12. [Deploying on Render](#12-deploying-on-render)
 
 ---
 
@@ -435,3 +436,65 @@ Port 6080 serves a small desktop in the browser (password `vscode`, from the `de
 | The link opens a GitHub sign-in or a 404 | Open it in the browser where you are signed in to the same GitHub account that owns the Codespace. |
 | A run fails with "Blocked" on a company address | The Codespace cannot reach private addresses, and `ALLOW_PRIVATE_TARGETS` is off by default. Use the Windows setup. |
 | Everything vanished | The Codespace was deleted or rebuilt. Screenshots live only inside it. |
+
+---
+
+## 12. Deploying on Render
+
+The repository contains a `Dockerfile` and a Render Blueprint (`render.yaml`) that run the web page and the service together as **one Render web service**, with Microsoft Edge inside the container.
+
+> **Read this first.** A Render web service has a **public address** that anyone on the internet can open, unlike a Codespace's private port. This deployment controls a real browser and stores your screenshots, so it is protected twice: a **sign-in password** in front of everything, and the **pairing token** behind it. Do not weaken either. A service that is only for you is better kept on your own computer.
+>
+> **Status:** the configuration is checked by tests (`service/test/render.test.ts`, `service/test/access-gate.test.ts`), the sign-in wall is tested end to end in real Edge (`e2e/gate-check.mjs`), and CI builds the image and runs it (job *Container image (Render)*). **The Render deployment itself has not been created yet** and the image has never been built by anyone but CI: expect to fix small things on the first deploy.
+
+### What you need to know before you deploy
+
+| | |
+|---|---|
+| **Plan** | `render.yaml` ships with `plan: free`, as requested. **A free instance has 512 MB of RAM, which Microsoft Edge will often exceed** (the browser is then killed mid-capture), it **goes to sleep after 15 minutes** without traffic (the next visit waits a minute while it wakes up), and it has **no disk**. Change it to `plan: 1c-2g` (about 1 CPU, 2 GB) for real use. |
+| **Storage** | Without a persistent disk, **every deploy, restart and wake-up deletes all screenshots**. A disk needs a paid plan: change the plan, remove the `# ` in front of the `disk:` block in `render.yaml`, and sync the Blueprint. A service with a disk has a few seconds of downtime on every deploy. |
+| **What it can reach** | Only public websites. A Render machine is not on your company network, so company-internal addresses and most company single-sign-on pages cannot be captured. Private addresses stay blocked (`ALLOW_PRIVATE_TARGETS=false`); do not change that on a public service. |
+| **Cost and limits** | Plans are billed by Render. `1c-2g` is a paid plan. The service is a single instance (do not scale it to several). |
+
+### Deploy it
+
+1. Push the repository to GitHub (it already is, on `main`).
+2. In the [Render dashboard](https://dashboard.render.com): **New → Blueprint**, choose this repository, and continue.
+3. Render reads `render.yaml` and asks for two values:
+   * **`GATEWAY_ACCESS_PASSWORD`** — the password for the sign-in page. At least 16 characters; use a passphrase.
+   * **`PAIRING_TOKEN`** — at least 24 letters, digits or `- _ . ~ + / =`. Make it random (for example `openssl rand -hex 24`).
+
+   Both are stored by Render, never in the repository or in the logs. Keep them in a password manager: you need both to use the site.
+4. **Apply**. The first build installs Edge and takes several minutes. Deploys are manual (`autoDeployTrigger: "off"`): use **Manual Deploy** to publish a new version.
+5. Open the service's `https://<name>.onrender.com` address. You see a sign-in form: enter the access password.
+6. The page opens. Go to **Settings**; the service address is already filled in. Paste the **pairing token** and press **Save and connect**.
+7. On the Dashboard keep **Headless** mode and capture as usual.
+
+### How the protection works
+
+```
+ Internet ──https──►  Render (TLS)  ──►  gateway :10000 (0.0.0.0)
+                                            │ no valid sign-in?  ──►  only the password form (and /healthz)
+                                            ▼ signed in
+                                       /api/*  ──►  service 127.0.0.1 (random port)  ──►  Edge (headless)
+                                       needs the pairing token as well
+```
+
+* **Nothing but the password form and `/healthz` is answered before sign-in** — no page, no file, no API. Strangers never reach the service, so they cannot guess pairing tokens or use up its limit on wrong tokens.
+* **Wrong passwords are slowed down and capped; the right one is never delayed.** A flood of guesses cannot lock you out.
+* **The sign-in is a signed cookie** (`__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`) that lasts 12 hours and is renewed while you use the page. Changing the password signs everybody out.
+* **Secrets are never printed.** The start-up log says only that they exist.
+* **The gateway refuses to start** on a public address without both secrets.
+* **Only this service's own `onrender.com` name is accepted** as the address (plus `localhost`); any other `Host` is refused.
+
+### If something does not work
+
+| Symptom | Fix |
+|---|---|
+| The deploy fails at "test -x /opt/microsoft/msedge/msedge" | Microsoft changed where the package installs Edge. Read the build log for the real path, set `EDGE_PATH` in the `Dockerfile`, and redeploy. |
+| The deploy fails with "GATEWAY_ACCESS_PASSWORD is not set" | Enter the two values in the service's **Environment** tab and redeploy. |
+| Every capture fails or the service restarts during a run | Edge ran out of memory. Use a plan with more RAM (`1c-2g` or larger). |
+| The first visit takes a minute | A free instance was asleep. |
+| The page says "You are signed out of this site" | Your 12-hour sign-in ended or the password changed. Reload and enter the access password. |
+| The page says "The pairing token was not accepted" | Paste the `PAIRING_TOKEN` value from the Render dashboard into **Settings**. |
+| Screenshots are gone after a deploy | There is no persistent disk (see above). |

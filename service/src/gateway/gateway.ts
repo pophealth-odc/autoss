@@ -14,10 +14,12 @@ import { pipeline } from 'node:stream';
 import { ConfigError } from '../config.js';
 import { isLocalhostOrigin } from '../http/origin-host.js';
 import type { Logger } from '../logger.js';
-import type { ApiErrorBody, ErrorCode } from '../shared/contract.js';
+import { AccessGate, GATE_LOGIN_PATH, validateAccessPassword } from './access-gate.js';
+import { sendError, sendText } from './respond.js';
 
 /**
- * One address for the web page AND the service, for places where the browser cannot reach 127.0.0.1 (GitHub Codespaces).
+ * One address for the web page AND the service, for places where the browser cannot reach 127.0.0.1 (GitHub Codespaces,
+ * Render).
  *
  * It serves the built web page and passes everything under /api to the service, which keeps listening on this computer
  * only and keeps all of its own checks. The page and its API share one origin, so the browser never makes a cross-site
@@ -26,9 +28,14 @@ import type { ApiErrorBody, ErrorCode } from '../shared/contract.js';
  * The service refuses any Host header but its own, and any Origin that is not allow-listed. This gateway therefore makes
  * the request look like what the service expects (Host 127.0.0.1, no Origin) AFTER doing the equivalent check itself.
  * The pairing token is still required for every call except /api/health.
+ *
+ * On a public address (Render) the gateway listens on every interface and an ACCESS PASSWORD is mandatory: nothing but the
+ * sign-in page and /healthz is answered until a visitor has signed in (see access-gate.ts).
  */
 
 export const DEFAULT_GATEWAY_PORT = 4580;
+/** Path a hosting platform may poll without signing in. It says only that the process is up. */
+export const HEALTH_PATH = '/healthz';
 
 export interface HostPolicy {
   /** Host names accepted in addition to localhost, 127.0.0.1 and [::1] (names only: no port, no scheme). */
@@ -41,6 +48,8 @@ export interface GatewayOptions extends HostPolicy {
   /** Folder with the built web page (index.html, assets/...). */
   webRoot: string;
   logger: Logger;
+  /** When set, nothing but the sign-in page and HEALTH_PATH is answered before the visitor has signed in. */
+  gate?: AccessGate;
 }
 
 /** Describes one connection, not the message, so a proxy must not pass it on (RFC 9110, section 7.6.1). */
@@ -110,9 +119,15 @@ function hostnameFromOrigin(value: string): string | null {
 
 export interface GatewaySettings {
   port: number;
+  /** '127.0.0.1' (default), or '0.0.0.0' for a hosting platform that connects from outside the machine (needs a password). */
+  host: '127.0.0.1' | '0.0.0.0';
   webRoot: string;
-  /** Host names that may be used in the address bar besides this computer's own: this Codespace's forwarded address. */
+  /** Host names that may be used in the address bar besides this computer's own: a Codespace's or Render's public address. */
   allowedHosts: string[];
+  /** The access password, or null when the gateway is only reachable from inside this machine. */
+  accessPassword: string | null;
+  /** True when the public address is https. */
+  secureCookie: boolean;
 }
 
 type Env = Record<string, string | undefined>;
@@ -126,13 +141,16 @@ function clean(value: string | undefined): string | undefined {
 }
 
 /**
- *  GATEWAY_ENABLED        true to serve the web page and the API on one address (off by default: null is returned)
- *  GATEWAY_PORT           port of the web page + API (default 4580; 0 picks a free one)
- *  GATEWAY_WEB_ROOT       folder with the built web page (default: ../frontend/dist next to the service folder)
- *  GATEWAY_ALLOWED_HOSTS  extra host names that may be used in the address bar, comma separated
+ *  GATEWAY_ENABLED          true to serve the web page and the API on one address (off by default: null is returned)
+ *  GATEWAY_PORT             port of the web page + API (default 4580; 0 picks a free one)
+ *  GATEWAY_HOST             127.0.0.1 (default) or 0.0.0.0. 0.0.0.0 is for a hosting platform and REQUIRES GATEWAY_ACCESS_PASSWORD
+ *  GATEWAY_ACCESS_PASSWORD  sign-in password for the public address (16-200 characters)
+ *  GATEWAY_WEB_ROOT         folder with the built web page (default: ../frontend/dist next to the service folder)
+ *  GATEWAY_ALLOWED_HOSTS    extra host names that may be used in the address bar, comma separated
  *
  * Inside a Codespace the forwarded address of this exact port is accepted too (CODESPACE_NAME and
  * GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN are set by Codespaces). Other Codespaces, and other ports of this one, are not.
+ * On Render, RENDER_EXTERNAL_HOSTNAME (this service's own onrender.com name) is accepted.
  */
 export function gatewaySettingsFromEnv(env: Env, serviceRoot: string): GatewaySettings | null {
   const problems: string[] = [];
@@ -151,6 +169,28 @@ export function gatewaySettingsFromEnv(env: Env, serviceRoot: string): GatewaySe
     else problems.push(`GATEWAY_PORT must be an integer between 0 and 65535 (got "${rawPort}")`);
   }
 
+  let host: GatewaySettings['host'] = '127.0.0.1';
+  const rawHost = clean(env['GATEWAY_HOST']);
+  if (rawHost !== undefined) {
+    if (rawHost === '127.0.0.1' || rawHost === '0.0.0.0') host = rawHost;
+    else problems.push(`GATEWAY_HOST must be 127.0.0.1 or 0.0.0.0 (got "${rawHost}")`);
+  }
+
+  const accessPassword = clean(env['GATEWAY_ACCESS_PASSWORD']) ?? null;
+  if (accessPassword !== null) {
+    const problem = validateAccessPassword(accessPassword);
+    if (problem) problems.push(`GATEWAY_ACCESS_PASSWORD: ${problem}`);
+  }
+  // Listening on every interface makes the service reachable by anyone who can reach the machine. Never without a password.
+  if (host === '0.0.0.0' && accessPassword === null) {
+    problems.push('GATEWAY_HOST=0.0.0.0 makes the service reachable from other machines, so GATEWAY_ACCESS_PASSWORD must be set as well.');
+  }
+  // On a public address the pairing token is a value you set and can read in the hosting dashboard. It is not generated and
+  // printed: the start-up message goes to logs that everyone with access to the project can read.
+  if (host === '0.0.0.0' && clean(env['PAIRING_TOKEN']) === undefined) {
+    problems.push('GATEWAY_HOST=0.0.0.0 also needs PAIRING_TOKEN to be set (24 or more characters), so that the token is never printed in the logs.');
+  }
+
   const allowedHosts = (clean(env['GATEWAY_ALLOWED_HOSTS']) ?? '')
     .split(/[\s,;]+/)
     .map((entry) => entry.trim().toLowerCase())
@@ -165,11 +205,26 @@ export function gatewaySettingsFromEnv(env: Env, serviceRoot: string): GatewaySe
 
   const forwarded = codespaceHost(env, port);
   if (forwarded !== null && !allowedHosts.includes(forwarded)) allowedHosts.push(forwarded);
+  const render = renderHost(env);
+  if (render !== null && !allowedHosts.includes(render)) allowedHosts.push(render);
   return {
     port,
+    host,
     webRoot: path.resolve(serviceRoot, clean(env['GATEWAY_WEB_ROOT']) ?? path.join('..', 'frontend', 'dist')),
     allowedHosts,
+    accessPassword,
+    // A public gateway always sits behind a TLS-terminating proxy, so its cookie must be Secure whatever the proxy is. Both known
+    // hosting platforms are https as well. Only a gateway reachable from this computer alone is plain http, where a "Secure"
+    // cookie would never be sent back.
+    secureCookie: host === '0.0.0.0' || forwarded !== null || render !== null,
   };
+}
+
+/** This Render web service's own onrender.com name (RENDER_EXTERNAL_HOSTNAME), or null elsewhere. */
+function renderHost(env: Env): string | null {
+  const name = clean(env['RENDER_EXTERNAL_HOSTNAME'])?.toLowerCase();
+  if (name === undefined || !/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(name)) return null;
+  return name;
 }
 
 /** Host name under which Codespaces forwards `port` of this codespace, or null outside Codespaces. */
@@ -181,8 +236,10 @@ function codespaceHost(env: Env, port: number): string | null {
   return `${name}-${port}.${domain}`.toLowerCase();
 }
 
-/** The address a person types: the Codespaces forwarding address when running in one, otherwise this computer. */
+/** The address a person types: the Render or Codespaces address when running there, otherwise this computer. */
 export function publicOrigin(env: Env, port: number): string {
+  const render = renderHost(env);
+  if (render !== null) return `https://${render}`;
   const forwarded = codespaceHost(env, port);
   return forwarded !== null ? `https://${forwarded}` : `http://127.0.0.1:${port}`;
 }
@@ -193,33 +250,8 @@ export function buildPairingLink(origin: string, token: string): string {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Responses
+// Headers
 // ---------------------------------------------------------------------------------------------------------------------
-
-function sendError(res: ServerResponse, status: number, code: ErrorCode, message: string, headers: OutgoingHttpHeaders = {}): void {
-  if (res.destroyed) return;
-  const body: ApiErrorBody = { error: { code, message } };
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(text),
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-    ...headers,
-  });
-  res.end(text);
-}
-
-function sendText(res: ServerResponse, status: number, text: string): void {
-  if (res.destroyed) return;
-  res.writeHead(status, {
-    'Content-Type': 'text/plain; charset=utf-8',
-    'Content-Length': Buffer.byteLength(text),
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.end(text);
-}
 
 function connectionTokens(value: string | string[] | undefined): Set<string> {
   const joined = Array.isArray(value) ? value.join(',') : (value ?? '');
@@ -354,7 +386,25 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: 
 // Entry points
 // ---------------------------------------------------------------------------------------------------------------------
 
+/** True for exactly "/healthz" with or without a query string. */
+function isHealthRequest(rawUrl: string | undefined): boolean {
+  return rawUrl === HEALTH_PATH || (rawUrl?.startsWith(`${HEALTH_PATH}?`) ?? false);
+}
+
 async function handle(req: IncomingMessage, res: ServerResponse, options: GatewayOptions, root: string): Promise<void> {
+  // The hosting platform's health check comes before every other check, the Host check included: Render sends the Host of a
+  // verified custom domain, which would otherwise fail the deploy. The answer is a constant that carries no data and no CORS
+  // headers, so a page on another website can learn nothing from it (including through DNS rebinding).
+  if (isHealthRequest(req.url)) {
+    const healthMethod = req.method ?? 'GET';
+    if (healthMethod !== 'GET' && healthMethod !== 'HEAD') {
+      sendText(res, 405, 'Method not allowed', { Allow: 'GET, HEAD' });
+    } else {
+      sendText(res, 200, healthMethod === 'HEAD' ? '' : 'ok');
+    }
+    return;
+  }
+
   const hostHeader = req.headers.host;
   const hostname = hostnameFromHostHeader(hostHeader);
   if (hostname === null || !isHostnameAllowed(hostname, options)) {
@@ -394,6 +444,31 @@ async function handle(req: IncomingMessage, res: ServerResponse, options: Gatewa
 
   const method = req.method ?? 'GET';
   const { pathname } = url;
+
+  // Behind the sign-in wall nothing is answered until the visitor has signed in: no page, no file, no API.
+  const gate = options.gate;
+  if (gate) {
+    if (pathname === GATE_LOGIN_PATH) {
+      await gate.handleLogin(req, res);
+      return;
+    }
+    if (!gate.isSignedIn(req)) {
+      if (pathname === '/api' || pathname.startsWith('/api/')) {
+        // The page reads this as an error and says so; it does not get an HTML page to choke on. The code is how the page tells
+        // "signed out" from "wrong pairing token" (both are 401); it must not depend on the wording of the message.
+        sendError(res, 401, 'sign_in_required', 'Sign in with the access password first. Reload the page to see the sign-in form.');
+      } else if (method === 'GET' || method === 'HEAD') {
+        gate.sendSignInPage(res, 200, null, method === 'HEAD');
+      } else {
+        sendError(res, 401, 'sign_in_required', 'Sign in with the access password first.');
+      }
+      return;
+    }
+    // Keep an open page signed in: a sign-in that is more than half used is renewed on the next request.
+    const renewal = gate.renewal(req);
+    if (renewal !== null) res.setHeader('Set-Cookie', renewal);
+  }
+
   if (pathname === '/api' || pathname.startsWith('/api/')) {
     if (!API_METHODS.includes(method)) {
       sendError(res, 405, 'method_not_allowed', `${method} is not supported here.`, { Allow: API_METHODS.join(', ') });
@@ -428,8 +503,16 @@ export interface RunningGateway {
   stop(): Promise<void>;
 }
 
-/** Starts listening on 127.0.0.1. The forwarding layer in front of it (Codespaces) connects from inside the same machine. */
-export async function startGateway(options: GatewayOptions & { port: number }): Promise<RunningGateway> {
+/**
+ * Starts listening. By default on 127.0.0.1 only: the forwarding layer in front of it (Codespaces) connects from inside the
+ * same machine. A hosting platform that connects from outside (Render) needs `host: '0.0.0.0'`, which is refused unless the
+ * sign-in wall is on.
+ */
+export async function startGateway(options: GatewayOptions & { port: number; host?: '127.0.0.1' | '0.0.0.0' }): Promise<RunningGateway> {
+  const host = options.host ?? '127.0.0.1';
+  if (host !== '127.0.0.1' && !options.gate) {
+    throw new Error('The gateway will not listen on every network interface without an access password (GATEWAY_ACCESS_PASSWORD).');
+  }
   const server = http.createServer(createGatewayHandler(options));
   // Browsers arrive through a forwarding proxy that keeps connections open; closing idle ones after a few seconds would race
   // with it. Streams (events, ZIP downloads) must not be cut by the default time limits either.
@@ -440,7 +523,7 @@ export async function startGateway(options: GatewayOptions & { port: number }): 
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(options.port, '127.0.0.1', () => {
+    server.listen(options.port, host, () => {
       server.off('error', reject);
       resolve();
     });

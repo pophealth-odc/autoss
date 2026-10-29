@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectEdge } from './browser/edge.js';
 import { ConfigError, loadConfig } from './config.js';
+import { AccessGate } from './gateway/access-gate.js';
 import { buildPairingLink, gatewaySettingsFromEnv, publicOrigin, startGateway, type RunningGateway } from './gateway/gateway.js';
 import { describeAllowedOrigins } from './http/app.js';
 import { createLogger } from './logger.js';
@@ -69,6 +70,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // A gateway that listens on every interface is public. Its start-up message goes to a hosting platform's logs, which other
+  // people can read, so it must never contain the pairing token or a link that carries it.
+  const publicGateway = gatewaySettings?.host === '0.0.0.0';
+
   const url = `http://${config.host === '::1' ? '[::1]' : config.host}:${service.port}`;
   const lines = [
     '',
@@ -78,22 +83,28 @@ async function main(): Promise<void> {
     bar(`Screenshots    ${config.screenshotsDir}`),
     bar(`Browser        ${edge.found ? `Microsoft Edge ${edge.version ?? ''}`.trim() : 'Microsoft Edge NOT FOUND'}`),
     bar(`Allowed sites  ${describeAllowedOrigins(config)}`),
-    '',
-    bar('PAIRING TOKEN (paste it into the web page under Settings):'),
-    bar(service.token.value),
   ];
-  if (config.frontendUrl) {
-    const link = `${config.frontendUrl.replace(/\/$/, '')}/#/connect?service=${encodeURIComponent(url)}&token=${encodeURIComponent(service.token.value)}`;
-    lines.push('', bar('One-click pairing link (open it in Edge):'), bar(link));
+  if (publicGateway) {
+    lines.push('', bar('The pairing token is NOT shown here because this service is public. It is the PAIRING_TOKEN setting of the deployment.'));
+  } else {
+    lines.push('', bar('PAIRING TOKEN (paste it into the web page under Settings):'), bar(service.token.value));
+    if (config.frontendUrl) {
+      const link = `${config.frontendUrl.replace(/\/$/, '')}/#/connect?service=${encodeURIComponent(url)}&token=${encodeURIComponent(service.token.value)}`;
+      lines.push('', bar('One-click pairing link (open it in Edge):'), bar(link));
+    }
+    if (service.token.source === 'generated' && service.token.file) lines.push('', bar(`The token is stored in ${service.token.file}`));
   }
   if (!edge.found) lines.push('', bar(`WARNING: ${edge.hint ?? 'Microsoft Edge was not found.'}`));
-  if (service.token.source === 'generated' && service.token.file) lines.push('', bar(`The token is stored in ${service.token.file}`));
 
-  // Optional: serve the built web page and the API from one address (used in GitHub Codespaces).
+  // Optional: serve the built web page and the API from one address (GitHub Codespaces, Render).
   let gateway: RunningGateway | null = null;
   if (gatewaySettings) {
     try {
-      gateway = await startGateway({ ...gatewaySettings, upstreamPort: service.port, logger });
+      const gate =
+        gatewaySettings.accessPassword === null
+          ? undefined
+          : new AccessGate({ password: gatewaySettings.accessPassword, secureCookie: gatewaySettings.secureCookie, logger });
+      gateway = await startGateway({ ...gatewaySettings, upstreamPort: service.port, logger, ...(gate ? { gate } : {}) });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       console.error(
@@ -109,9 +120,14 @@ async function main(): Promise<void> {
       '',
       bar('Web page + service on one address (GATEWAY_ENABLED):'),
       bar(origin),
-      bar('Open this link once to pair this browser:'),
-      bar(buildPairingLink(origin, service.token.value)),
+      bar(
+        publicGateway
+          ? `Listening on every network interface, port ${gateway.port} (PUBLIC). Sign-in wall: ON.`
+          : `Listening on 127.0.0.1:${gateway.port} (this computer only).${gatewaySettings.accessPassword === null ? '' : ' Sign-in wall: ON.'}`,
+      ),
     );
+    // The pairing link carries the token after "#". It is shown only when the gateway cannot be reached from other machines.
+    if (!publicGateway) lines.push(bar('Open this link once to pair this browser:'), bar(buildPairingLink(origin, service.token.value)));
   }
 
   lines.push('', bar('Keep this window open while you use the gallery. Press Ctrl+C to stop.'), '');

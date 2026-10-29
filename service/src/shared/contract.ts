@@ -272,6 +272,8 @@ export const ERROR_CODES = [
   'bad_request',
   'validation_failed',
   'unauthorized',
+  /** Only the sign-in wall of a public deployment sends this: the visitor must enter the access password (not the pairing token). */
+  'sign_in_required',
   'forbidden',
   'origin_not_allowed',
   'bad_host',
